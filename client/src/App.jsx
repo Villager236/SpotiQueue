@@ -205,7 +205,7 @@ function App() {
         <Queue fingerprintId={fingerprintId} />
         <footer className="mt-8 pt-4 flex justify-start">
           <a
-            href="https://github.com/stroepwafel/spotiqueue"
+            href="https://github.com/Villager236/SpotiQueue"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground/80 transition-colors"
