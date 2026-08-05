@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import axios from '@/lib/api'
 import { Card, CardContent } from './ui/card'
 import { Button } from './ui/button'
-import { Loader2, Check, X, Music } from 'lucide-react'
+import { Loader2, Check, X, Music, MicOff } from 'lucide-react'
 
 function PrequeueManagement() {
   const [pending, setPending] = useState([])
@@ -97,6 +97,11 @@ function PrequeueManagement() {
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">{request.track_name}</p>
                     <p className="text-sm text-muted-foreground truncate">{request.artist_name}</p>
+                    {request.has_lyrics === 0 && (
+                        <p className="mt-1 inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                          <MicOff className="h-3 w-3" /> No synced lyrics
+                        </p>
+                    )}
                     {request.approved_by && (
                       <p className="text-xs text-muted-foreground">Reviewed by: {request.approved_by}</p>
                     )}

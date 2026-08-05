@@ -4,18 +4,20 @@ import { ThemeProvider } from './components/theme-provider'
 import './index.css'
 import App from './App'
 import Display from './components/Display'
+import Karaoke from './components/Karaoke'
 
 const root = ReactDOM.createRoot(document.getElementById('root'))
 
-function isDisplayRoute() {
+function routeFor(suffix) {
   if (typeof window === 'undefined') return false
   const path = window.location.pathname.replace(/\/$/, '')
-  return path.endsWith('/display')
+    return path.endsWith(suffix)
 }
 
 function Root() {
-  const isDisplay = isDisplayRoute()
-  return isDisplay ? <Display /> : (
+    if (routeFor('/karaoke')) return <Karaoke />
+    if (routeFor('/display')) return <Display />
+    return (
     <ThemeProvider defaultTheme="system" storageKey="spotiqueue-theme">
       <App />
     </ThemeProvider>

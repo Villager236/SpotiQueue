@@ -1,13 +1,36 @@
 const axios = require('axios');
-const { getConfig } = require('./config');
 
 let accessToken = null;
 let tokenExpiresAt = 0;
+
+/**
+ * Player endpoints (/me/player/*) are throttled separately from the rest of the
+ * API, and the limit follows the Spotify *account*, not the app - swapping in new
+ * client credentials does not reset it.
+ *
+ * Kept here rather than in the route so reconnecting an account clears it.
+ */
+let playerBackoffUntil = 0;
+
+function getPlayerBackoffUntil() {
+  return playerBackoffUntil;
+}
+
+function setPlayerBackoff(ms) {
+  playerBackoffUntil = Date.now() + ms;
+}
+
+function clearPlayerBackoff() {
+  playerBackoffUntil = 0;
+}
 
 // Clear token cache when refresh token changes
 function clearTokenCache() {
   accessToken = null;
   tokenExpiresAt = 0;
+  // Reconnecting is the user telling us to try again - never make them wait out
+  // a backoff that was recorded against the previous connection.
+  clearPlayerBackoff();
 }
 
 // Spotify API base URL
@@ -16,40 +39,40 @@ const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 // Get access token using client credentials flow
 async function getAccessToken() {
   const now = Math.floor(Date.now() / 1000);
-  
+
   // Return cached token if still valid
   if (accessToken && tokenExpiresAt > now + 60) {
     return accessToken;
   }
-  
+
   const clientId = process.env.SPOTIFY_CLIENT_ID;
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
   const refreshToken = process.env.SPOTIFY_REFRESH_TOKEN;
-  
+
   if (!clientId || !clientSecret) {
     throw new Error('Spotify credentials not configured');
   }
-  
+
   try {
     // Use refresh token if available, otherwise client credentials
     if (refreshToken) {
       const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-      const response = await axios.post('https://accounts.spotify.com/api/token', 
-        new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': `Basic ${authHeader}`
+      const response = await axios.post('https://accounts.spotify.com/api/token',
+          new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken
+          }),
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Authorization': `Basic ${authHeader}`
+            }
           }
-        }
       );
-      
+
       accessToken = response.data.access_token;
       tokenExpiresAt = now + response.data.expires_in;
-      
+
       // Update refresh token if provided
       if (response.data.refresh_token) {
         process.env.SPOTIFY_REFRESH_TOKEN = response.data.refresh_token;
@@ -57,22 +80,22 @@ async function getAccessToken() {
     } else {
       // Client credentials flow (limited scope)
       const response = await axios.post('https://accounts.spotify.com/api/token',
-        new URLSearchParams({
-          grant_type: 'client_credentials',
-          client_id: clientId,
-          client_secret: clientSecret
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
+          new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: clientId,
+            client_secret: clientSecret
+          }),
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded'
+            }
           }
-        }
       );
-      
+
       accessToken = response.data.access_token;
       tokenExpiresAt = now + response.data.expires_in;
     }
-    
+
     return accessToken;
   } catch (error) {
     console.error('Error getting Spotify access token:', error.response?.data || error.message);
@@ -89,7 +112,7 @@ async function getAccessToken() {
 // Search for tracks
 async function searchTracks(query, limit = 10) {
   const token = await getAccessToken();
-  
+
   try {
     const response = await axios.get(`${SPOTIFY_API_BASE}/search`, {
       params: {
@@ -101,7 +124,7 @@ async function searchTracks(query, limit = 10) {
         'Authorization': `Bearer ${token}`
       }
     });
-    
+
     return response.data.tracks.items.map(track => ({
       id: track.id,
       name: track.name,
@@ -127,14 +150,14 @@ async function searchTracks(query, limit = 10) {
 // Get track by ID
 async function getTrack(trackId) {
   const token = await getAccessToken();
-  
+
   try {
     const response = await axios.get(`${SPOTIFY_API_BASE}/tracks/${trackId}`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
     });
-    
+
     const track = response.data;
     return {
       id: track.id,
@@ -157,22 +180,22 @@ function parseSpotifyUrl(url) {
   if (!url || typeof url !== 'string') {
     return null;
   }
-  
+
   // Handle spotify:track: URI format
   if (url.startsWith('spotify:track:')) {
     return url.replace('spotify:track:', '').split('?')[0];
   }
-  
+
   // Handle web URLs
   try {
     const urlObj = new URL(url);
     const pathParts = urlObj.pathname.split('/');
     const trackIndex = pathParts.indexOf('track');
-    
+
     if (trackIndex !== -1 && pathParts[trackIndex + 1]) {
       return pathParts[trackIndex + 1].split('?')[0];
     }
-    
+
     return null;
   } catch (error) {
     // If URL parsing fails, try to extract track ID directly
@@ -181,20 +204,69 @@ function parseSpotifyUrl(url) {
     if (trackMatch && trackMatch[1]) {
       return trackMatch[1];
     }
-    
+
     return null;
   }
+}
+
+/** Extract a playlist or album ID from a Spotify URL/URI. */
+function parseSpotifyCollectionUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+
+  const uriMatch = url.match(/^spotify:(playlist|album):([a-zA-Z0-9]+)/);
+  if (uriMatch) return { type: uriMatch[1], id: uriMatch[2] };
+
+  const webMatch = url.match(/(playlist|album)\/([a-zA-Z0-9]+)/);
+  if (webMatch) return { type: webMatch[1], id: webMatch[2].split('?')[0] };
+
+  return null;
+}
+
+/** All tracks in a playlist or album, following pagination. */
+async function getCollectionTracks(type, id, max = 500) {
+  const token = await getAccessToken();
+  const endpoint = type === 'album'
+      ? `${SPOTIFY_API_BASE}/albums/${id}/tracks`
+      : `${SPOTIFY_API_BASE}/playlists/${id}/tracks`;
+
+  const tracks = [];
+  let url = endpoint;
+  let params = { limit: 50 };
+
+  while (url && tracks.length < max) {
+    const response = await axios.get(url, {
+      params,
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    for (const item of response.data.items || []) {
+      // Playlists wrap the track; album track lists do not
+      const track = type === 'album' ? item : item.track;
+      if (!track?.id) continue;
+      tracks.push({
+        id: track.id,
+        name: track.name,
+        artists: (track.artists || []).map(a => a.name).join(', '),
+        duration_ms: track.duration_ms
+      });
+    }
+
+    url = response.data.next;
+    params = undefined; // `next` already carries the query string
+  }
+
+  return tracks.slice(0, max);
 }
 
 // Get currently playing track (requires user authorization)
 async function getNowPlaying() {
   const token = await getAccessToken();
   const userId = process.env.SPOTIFY_USER_ID;
-  
+
   if (!userId) {
     return null;
   }
-  
+
   try {
     // Try to get currently playing track
     const response = await axios.get(`${SPOTIFY_API_BASE}/me/player/currently-playing`, {
@@ -202,18 +274,21 @@ async function getNowPlaying() {
         'Authorization': `Bearer ${token}`
       }
     });
-    
+
     if (response.status === 204 || !response.data) {
       return null;
     }
-    
+
+    // Null during ads, and for episodes when the client asks only for tracks
     const track = response.data.item;
+    if (!track) return null;
+
     return {
       id: track.id,
       name: track.name,
-      artists: track.artists.map(a => a.name).join(', '),
-      album: track.album.name,
-      album_art: track.album.images[0]?.url || null,
+      artists: (track.artists || []).map(a => a.name).join(', '),
+      album: track.album?.name,
+      album_art: track.album?.images?.[0]?.url || null,
       duration_ms: track.duration_ms,
       progress_ms: response.data.progress_ms,
       is_playing: response.data.is_playing
@@ -225,14 +300,20 @@ async function getNowPlaying() {
       accessToken = null;
       tokenExpiresAt = 0;
     }
-    return null;
+    // Rethrow so callers can tell "nothing is playing" (null, above) apart from
+    // "Spotify would not answer" - reporting a rate-limit as an empty player
+    // blanks every screen in the room.
+    const wrapped = new Error(`Spotify player request failed: ${error.response?.status || error.code || error.message}`);
+    wrapped.status = error.response?.status;
+    wrapped.retryAfter = parseInt(error.response?.headers?.['retry-after'] || '', 10) || null;
+    throw wrapped;
   }
 }
 
 // Add track to queue (requires user authorization)
 async function addToQueue(trackUri) {
   const token = await getAccessToken();
-  
+
   try {
     await axios.post(`${SPOTIFY_API_BASE}/me/player/queue`, null, {
       params: {
@@ -242,15 +323,15 @@ async function addToQueue(trackUri) {
         'Authorization': `Bearer ${token}`
       }
     });
-    
+
     return true;
   } catch (error) {
     console.error('Error adding to queue:', error.response?.data || error.message);
-    
+
     if (error.response?.status === 404) {
       throw new Error('No active Spotify device found. Please start playing music on a device.');
     }
-    
+
     throw new Error('Failed to add track to queue');
   }
 }
@@ -296,10 +377,14 @@ module.exports = {
   searchTracks,
   getTrack,
   parseSpotifyUrl,
+  parseSpotifyCollectionUrl,
+  getCollectionTracks,
   getNowPlaying,
   addToQueue,
   getQueue,
   getAccessToken,
-  clearTokenCache
+  clearTokenCache,
+  getPlayerBackoffUntil,
+  setPlayerBackoff,
+  clearPlayerBackoff
 };
-

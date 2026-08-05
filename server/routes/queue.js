@@ -4,19 +4,11 @@ const { getDb } = require('../db');
 const { getConfig } = require('../utils/config');
 const { searchTracks, getTrack, parseSpotifyUrl, addToQueue, getQueue } = require('../utils/spotify');
 const { getGuestAuthRequirements, sendAuthRequiredResponse } = require('../utils/guest-auth');
+const { getRemainingCooldown, hasExhaustedQuota, applyCooldownAfterSuccess, getCooldownSettings } = require('../utils/cooldown');
+const { checkAvailability, warmAvailability } = require('../utils/lyricsAvailability');
 
 const router = express.Router();
 const db = getDb();
-
-function getCooldownFingerprintIds(fingerprint) {
-  if (fingerprint.github_id) {
-    return db.prepare('SELECT id FROM fingerprints WHERE github_id = ?').all(fingerprint.github_id).map(r => r.id);
-  }
-  if (fingerprint.google_id) {
-    return db.prepare('SELECT id FROM fingerprints WHERE google_id = ?').all(fingerprint.google_id).map(r => r.id);
-  }
-  return [fingerprint.id];
-}
 
 function isGracePeriodEnabled() {
   if (getConfig('queue_grace_period_enabled') === 'false') return false;
@@ -60,34 +52,6 @@ function pendingTrackPayload(pending) {
     album_art: pending.album_art,
     uri: pending.track_uri
   };
-}
-
-function applyCooldownAfterSuccess(fingerprintId, fingerprint, now) {
-  const cooldownEnabled = getConfig('fingerprinting_enabled') === 'true';
-  const cooldownIds = getCooldownFingerprintIds(fingerprint);
-  if (!cooldownEnabled || cooldownIds.length === 0) return;
-
-  const songsBeforeCooldown = parseInt(getConfig('songs_before_cooldown') || '1');
-  const cooldownDuration = parseInt(getConfig('cooldown_duration') || '300');
-  const cooldownWindowStart = now - cooldownDuration;
-  const placeholders = cooldownIds.map(() => '?').join(',');
-  const recentQueues = db.prepare(`
-    SELECT COUNT(*) as count
-    FROM queue_attempts
-    WHERE fingerprint_id IN (${placeholders})
-      AND status = 'success'
-      AND timestamp > ?
-  `).get(...cooldownIds, cooldownWindowStart);
-  const recentQueueCount = recentQueues ? recentQueues.count : 0;
-
-  if (recentQueueCount >= songsBeforeCooldown) {
-    const cooldownExpires = now + cooldownDuration;
-    const updatePlaceholders = cooldownIds.map(() => '?').join(',');
-    db.prepare(`
-      UPDATE fingerprints SET cooldown_expires = ?
-      WHERE id IN (${updatePlaceholders})
-    `).run(cooldownExpires, ...cooldownIds);
-  }
 }
 
 async function confirmPendingQueue(pendingId) {
@@ -172,7 +136,7 @@ async function confirmPendingQueue(pendingId) {
       UPDATE fingerprints SET last_queue_attempt = ? WHERE id = ?
     `).run(now, pending.fingerprint_id);
 
-    applyCooldownAfterSuccess(pending.fingerprint_id, fingerprint, now);
+    applyCooldownAfterSuccess(fingerprint, now);
     db.prepare('UPDATE pending_queues SET status = ? WHERE id = ?').run('confirmed', pendingId);
     queueCacheExpiry = 0;
 
@@ -228,7 +192,7 @@ router.get('/current', async (req, res) => {
 
     const queue = await getQueue();
     const guestQueuedIds = new Set(
-      db.prepare("SELECT DISTINCT track_id FROM queue_attempts WHERE status = 'success' AND track_id IS NOT NULL").all().map(r => r.track_id)
+        db.prepare("SELECT DISTINCT track_id FROM queue_attempts WHERE status = 'success' AND track_id IS NOT NULL").all().map(r => r.track_id)
     );
 
     if (queue?.queue?.length > 0) {
@@ -273,6 +237,15 @@ router.post('/search', async (req, res) => {
       tracks = tracks.filter(track => !track.explicit);
     }
 
+    // Start lyrics lookups now so the badges are ready by the time the guest
+    // has finished reading the results.
+    tracks.forEach(track => warmAvailability({
+      id: track.id,
+      name: track.name,
+      artists: track.artists,
+      durationMs: track.duration_ms
+    }));
+
     res.json({ tracks });
   } catch (error) {
     console.error('Search error:', error);
@@ -293,7 +266,7 @@ async function queueTrackImmediately(fingerprintId, fingerprint, trackId, trackI
     UPDATE fingerprints SET last_queue_attempt = ? WHERE id = ?
   `).run(now, fingerprintId);
 
-  applyCooldownAfterSuccess(fingerprintId, fingerprint, now);
+  applyCooldownAfterSuccess(fingerprint, now);
   queueCacheExpiry = 0;
 
   res.json({
@@ -344,61 +317,31 @@ router.post('/add', async (req, res) => {
     return res.status(403).json({ error: 'This device is blocked from queueing songs.' });
   }
 
-  const cooldownEnabled = getConfig('fingerprinting_enabled') === 'true';
   const now = Math.floor(Date.now() / 1000);
-  const cooldownIds = getCooldownFingerprintIds(fingerprint);
 
-  if (cooldownEnabled && cooldownIds.length > 0) {
-    const placeholders = cooldownIds.map(() => '?').join(',');
-    const maxCooldown = db.prepare(`
-      SELECT MAX(cooldown_expires) as mx FROM fingerprints
-      WHERE id IN (${placeholders}) AND cooldown_expires > ?
-    `).get(...cooldownIds, now);
-    if (maxCooldown?.mx) {
-      const remaining = maxCooldown.mx - now;
-      db.prepare(`
-        INSERT INTO queue_attempts (fingerprint_id, status, error_message, timestamp)
-        VALUES (?, ?, ?, ?)
-      `).run(fingerprintId, 'rate_limited', 'Cooldown active', now);
-      return res.status(429).json({
-        error: 'Please wait before queueing another song!',
-        cooldown_remaining: remaining
-      });
-    }
+  const remainingCooldown = getRemainingCooldown(fingerprint, now);
+  if (remainingCooldown > 0) {
+    db.prepare(`
+      INSERT INTO queue_attempts (fingerprint_id, status, error_message, timestamp)
+      VALUES (?, ?, ?, ?)
+    `).run(fingerprintId, 'rate_limited', 'Cooldown active', now);
+    return res.status(429).json({
+      error: 'Please wait before queueing another song!',
+      cooldown_remaining: remainingCooldown
+    });
   }
 
-  if (cooldownEnabled && cooldownIds.length > 0) {
-    const songsBeforeCooldown = parseInt(getConfig('songs_before_cooldown') || '1');
-    const cooldownDuration = parseInt(getConfig('cooldown_duration') || '300');
-    const cooldownWindowStart = now - cooldownDuration;
-    const placeholders = cooldownIds.map(() => '?').join(',');
-    const recentQueues = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM queue_attempts
-      WHERE fingerprint_id IN (${placeholders})
-        AND status = 'success'
-        AND timestamp > ?
-    `).get(...cooldownIds, cooldownWindowStart);
-    const recentQueueCount = recentQueues ? recentQueues.count : 0;
+  if (hasExhaustedQuota(fingerprint, now)) {
+    const { songsBeforeCooldown, cooldownDuration } = getCooldownSettings();
+    db.prepare(`
+      INSERT INTO queue_attempts (fingerprint_id, status, error_message, timestamp)
+      VALUES (?, ?, ?, ?)
+    `).run(fingerprintId, 'rate_limited', 'Cooldown limit reached', now);
 
-    if (recentQueueCount >= songsBeforeCooldown) {
-      const cooldownExpires = now + cooldownDuration;
-      const updatePlaceholders = cooldownIds.map(() => '?').join(',');
-      db.prepare(`
-        UPDATE fingerprints SET cooldown_expires = ?
-        WHERE id IN (${updatePlaceholders})
-      `).run(cooldownExpires, ...cooldownIds);
-
-      db.prepare(`
-        INSERT INTO queue_attempts (fingerprint_id, status, error_message, timestamp)
-        VALUES (?, ?, ?, ?)
-      `).run(fingerprintId, 'rate_limited', 'Cooldown limit reached', now);
-
-      return res.status(429).json({
-        error: `You've reached the limit of ${songsBeforeCooldown} song${songsBeforeCooldown > 1 ? 's' : ''} before cooldown. Please wait!`,
-        cooldown_remaining: cooldownDuration
-      });
-    }
+    return res.status(429).json({
+      error: `You've reached the limit of ${songsBeforeCooldown} song${songsBeforeCooldown > 1 ? 's' : ''} before cooldown. Please wait!`,
+      cooldown_remaining: cooldownDuration
+    });
   }
 
   const existingPending = db.prepare(`
@@ -446,6 +389,25 @@ router.post('/add', async (req, res) => {
       return res.status(403).json({ error: 'Explicit songs are not allowed.' });
     }
 
+    const hasLyrics = await checkAvailability({
+      id: trackId,
+      name: trackInfo.name,
+      artists: trackInfo.artists,
+      durationMs: trackInfo.duration_ms
+    });
+    if (!hasLyrics && getConfig('require_synced_lyrics') === 'true') {
+      db.prepare(`
+        INSERT INTO queue_attempts (fingerprint_id, track_id, track_name, artist_name, status, error_message, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(fingerprintId, trackId, trackInfo.name, trackInfo.artists, 'blocked', 'No synced lyrics', now);
+
+      return res.status(403).json({
+        error: 'No synced lyrics available for this song, so it cannot be shown on the screen. Please pick another one.',
+        no_lyrics: true
+      });
+    }
+    trackInfo.has_lyrics = hasLyrics;
+
     if (!isGracePeriodEnabled()) {
       return queueTrackImmediately(fingerprintId, fingerprint, trackId, trackInfo, now, res);
     }
@@ -458,15 +420,15 @@ router.post('/add', async (req, res) => {
       INSERT INTO pending_queues (id, fingerprint_id, track_id, track_name, artist_name, album_art, track_uri, status, execute_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
     `).run(
-      pendingId,
-      fingerprintId,
-      trackId,
-      trackInfo.name,
-      trackInfo.artists,
-      trackInfo.album_art || null,
-      trackInfo.uri,
-      executeAt,
-      now
+        pendingId,
+        fingerprintId,
+        trackId,
+        trackInfo.name,
+        trackInfo.artists,
+        trackInfo.album_art || null,
+        trackInfo.uri,
+        executeAt,
+        now
     );
 
     res.json({
@@ -514,8 +476,8 @@ router.get('/pending/:pendingId', async (req, res) => {
 
   const track = pendingTrackPayload(pending);
   const message = pending.status === 'confirmed'
-    ? `Queued: ${pending.track_name} - ${pending.artist_name}`
-    : undefined;
+      ? `Queued: ${pending.track_name} - ${pending.artist_name}`
+      : undefined;
 
   res.json({
     status: pending.status,

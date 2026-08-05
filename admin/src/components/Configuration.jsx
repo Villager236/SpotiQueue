@@ -21,6 +21,97 @@ function ConfigItem({ label, children, saveKey, saveVal, help, config, updateCon
   )
 }
 
+/** Warm the lyrics cache from a playlist before the event, so nothing is fetched live. */
+function LyricsPrewarm() {
+  const [url, setUrl] = useState('')
+  const [status, setStatus] = useState(null)
+  const [error, setError] = useState('')
+  const [starting, setStarting] = useState(false)
+
+  const poll = async () => {
+    try {
+      const res = await axios.get('/api/lyrics/prewarm')
+      setStatus(res.data)
+      return res.data
+    } catch { return null }
+  }
+
+  useEffect(() => { poll() }, [])
+
+  useEffect(() => {
+    if (!status?.running) return
+    const t = setInterval(poll, 1500)
+    return () => clearInterval(t)
+  }, [status?.running])
+
+  const start = async () => {
+    setError('')
+    setStarting(true)
+    try {
+      const res = await axios.post('/api/lyrics/prewarm', { url })
+      setStatus(res.data)
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to start pre-caching.')
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const stop = async () => {
+    try {
+      const res = await axios.delete('/api/lyrics/prewarm')
+      setStatus(res.data)
+    } catch { /* ignore */ }
+  }
+
+  const pct = status?.total ? Math.round((status.done / status.total) * 100) : 0
+
+  return (
+      <div className="py-3">
+        <span className="block font-medium">Pre-cache lyrics from a playlist</span>
+        <p className="text-xs text-muted-foreground mt-1 mb-3">
+          Looks up every track ahead of time and stores the lyrics locally. Run this before an
+          event so nothing depends on an external service on the night. Lookups are throttled,
+          so a large playlist takes a few minutes.
+        </p>
+
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Input
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://open.spotify.com/playlist/..."
+              className="w-full sm:w-96 font-mono text-sm"
+              disabled={status?.running}
+          />
+          {status?.running ? (
+              <Button size="sm" variant="destructive" onClick={stop}>Stop</Button>
+          ) : (
+              <Button size="sm" onClick={start} disabled={starting || !url.trim()}>
+                {starting ? 'Starting…' : 'Pre-cache'}
+              </Button>
+          )}
+        </div>
+
+        {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+
+        {status && status.total > 0 && (
+            <div className="mt-3">
+              <div className="h-2 w-full sm:w-96 overflow-hidden rounded-full bg-muted">
+                <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {status.running ? 'Caching' : 'Finished'} — {status.done}/{status.total} ·{' '}
+                <span className="text-primary">{status.found} with lyrics</span> ·{' '}
+                {status.missing} without
+                {status.failed > 0 && <> · {status.failed} failed</>}
+              </p>
+            </div>
+        )}
+      </div>
+  )
+}
+
 function Configuration() {
   const [config, setConfig] = useState({})
   const [adminPasswordDraft, setAdminPasswordDraft] = useState('')
@@ -132,6 +223,16 @@ function Configuration() {
             help="When disabled, all queue requests and search will be blocked."
           />
           <ConfigItem config={config} updateConfig={updateConfig} label={<label className="flex items-center gap-2"><input type="checkbox" checked={config.prequeue_enabled === 'true'} onChange={(e) => handleChange('prequeue_enabled', e.target.checked ? 'true' : 'false')} /> Enable Prequeue (approval required)</label>} saveKey="prequeue_enabled" saveVal={config.prequeue_enabled || 'false'} help="When enabled, queue requests must be approved in the Prequeue tab before adding to Spotify." />
+          <ConfigItem
+              config={config}
+              updateConfig={updateConfig}
+              label={<><span className="block font-medium">Max Pending Requests Per Guest</span><p className="text-xs text-muted-foreground mt-1">How many un-reviewed songs one guest can have waiting</p></>}
+              saveKey="prequeue_max_pending_per_guest"
+              saveVal={config.prequeue_max_pending_per_guest || '2'}
+              help="Stops one person burying the approval list faster than you can work through it."
+          >
+            <Input type="number" value={config.prequeue_max_pending_per_guest || '2'} onChange={(e) => handleChange('prequeue_max_pending_per_guest', e.target.value)} min="1" className="w-full sm:w-20" />
+          </ConfigItem>
         </CardContent>
       </Card>
 
@@ -207,9 +308,27 @@ function Configuration() {
       <Card>
         <CardContent className="pt-6">
           <h2 className="text-lg font-semibold mb-4">Display Mode</h2>
-          <ConfigItem config={config} updateConfig={updateConfig} label={<label className="flex items-center gap-2"><input type="checkbox" checked={config.aura_enabled === 'true'} onChange={(e) => handleChange('aura_enabled', e.target.checked ? 'true' : 'false')} /> Enable Album Aura</label>} saveKey="aura_enabled" saveVal={config.aura_enabled || 'false'} help="Show radial gradient from album art dominant color on the /display party view." />
+          <ConfigItem config={config} updateConfig={updateConfig} label={<label className="flex items-center gap-2"><input type="checkbox" checked={config.aura_enabled === 'true'} onChange={(e) => handleChange('aura_enabled', e.target.checked ? 'true' : 'false')} /> Enable Album Aura</label>} saveKey="aura_enabled" saveVal={config.aura_enabled || 'false'} help="Show radial gradient from album art dominant color on the /display and /karaoke views." />
+          <ConfigItem
+              config={config}
+              updateConfig={updateConfig}
+              label={<><span className="block font-medium">Lyric Sync Offset (ms)</span><p className="text-xs text-muted-foreground mt-1">Negative shows lyrics earlier</p></>}
+              saveKey="lyric_sync_offset_ms"
+              saveVal={config.lyric_sync_offset_ms ?? '-220'}
+              help="Calibrate against your actual speakers. If lyrics appear too late, go more negative. Bluetooth speakers typically add 100-300ms of their own delay, so try -400 to -600 there. Applies to /display and /karaoke, and takes effect within ~10 seconds without a reload."
+          >
+            <Input
+                type="number"
+                value={config.lyric_sync_offset_ms ?? '-220'}
+                onChange={(e) => handleChange('lyric_sync_offset_ms', e.target.value)}
+                min="-5000"
+                max="5000"
+                step="50"
+                className="w-full sm:w-28"
+            />
+          </ConfigItem>
         </CardContent>
-      </Card>
+        </Card>
 
       <Card>
         <CardContent className="pt-6">
@@ -223,6 +342,37 @@ function Configuration() {
         <CardContent className="pt-6">
           <h2 className="text-lg font-semibold mb-4">Content Filtering</h2>
           <ConfigItem config={config} updateConfig={updateConfig} label={<label className="flex items-center gap-2"><input type="checkbox" checked={config.ban_explicit === 'true'} onChange={(e) => handleChange('ban_explicit', e.target.checked ? 'true' : 'false')} /> Ban Explicit Songs</label>} saveKey="ban_explicit" help="Block songs marked explicit by Spotify." />
+          <ConfigItem
+              config={config}
+              updateConfig={updateConfig}
+              label={<label className="flex items-center gap-2"><input type="checkbox" checked={config.require_synced_lyrics === 'true'} onChange={(e) => handleChange('require_synced_lyrics', e.target.checked ? 'true' : 'false')} /> Require Synced Lyrics</label>}
+              saveKey="require_synced_lyrics"
+              saveVal={config.require_synced_lyrics || 'false'}
+              help="Reject songs that have no synced lyrics, so nothing reaches the beamer with an empty screen. Tracks are always labelled in the guest UI and prequeue list regardless of this setting. If every lyrics provider is unreachable, songs are allowed through rather than blocked."
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="pt-6">
+          <h2 className="text-lg font-semibold mb-4">Lyrics</h2>
+          <ConfigItem
+              config={config}
+              updateConfig={updateConfig}
+              label={<><span className="block font-medium">Lyrics Providers</span><p className="text-xs text-muted-foreground mt-1">Comma-separated, tried in order</p></>}
+              saveKey="lyrics_providers"
+              saveVal={config.lyrics_providers || 'lrclib,netease'}
+              help="Available: lrclib, netease. The first provider that returns synced lyrics wins. Set to just one to compare quality. Point lrclib at a self-hosted instance with the LRCLIB_BASE_URL environment variable."
+          >
+            <Input
+                type="text"
+                value={config.lyrics_providers ?? 'lrclib,netease'}
+                onChange={(e) => handleChange('lyrics_providers', e.target.value)}
+                placeholder="lrclib,netease"
+                className="w-full sm:w-56 font-mono"
+            />
+          </ConfigItem>
+          <LyricsPrewarm />
         </CardContent>
       </Card>
 

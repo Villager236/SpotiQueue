@@ -13,6 +13,7 @@ const authRouter = require('./routes/auth');
 const githubAuthRouter = require('./routes/github-auth');
 const googleAuthRouter = require('./routes/google-auth');
 const prequeueRouter = require('./routes/prequeue');
+const lyricsRouter = require('./routes/lyrics');
 const { processExpiredPendingQueues } = require('./routes/queue');
 const { initDatabase } = require('./db');
 const { createSessionMiddleware } = require('./sessionMiddleware');
@@ -81,12 +82,13 @@ app.use('/api/auth', authRouter);
 app.use('/api/github', githubAuthRouter);
 app.use('/api/google', googleAuthRouter);
 app.use('/api/prequeue', prequeueRouter);
+app.use('/api/lyrics', lyricsRouter);
 
 // Root route - helpful message in development
 if (!isProduction) {
   app.get('/', (req, res) => {
     res.send(`
-      <html>
+      <html lang="">
         <head>
           <title>Spotify Queue API</title>
           <style>
@@ -170,12 +172,13 @@ adminApp.use('/api/auth', authRouter);
 adminApp.use('/api/github', githubAuthRouter);
 adminApp.use('/api/google', googleAuthRouter);
 adminApp.use('/api/prequeue', prequeueRouter);
+adminApp.use('/api/lyrics', lyricsRouter);
 
 // Root route - helpful message in development
 if (!isProduction) {
   adminApp.get('/', (req, res) => {
     res.send(`
-      <html>
+      <html lang="">
         <head>
           <title>Spotify Queue Admin API</title>
           <style>

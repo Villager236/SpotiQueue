@@ -4,10 +4,11 @@ import { ThemeToggle } from './components/theme-toggle'
 import NowPlaying from './components/NowPlaying'
 import QueueForm from './components/QueueForm'
 import Queue from './components/Queue'
-import { Github, Tv } from 'lucide-react'
+import { Github, Tv, Mic } from 'lucide-react'
 
 const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true'
 const displayHref = `${import.meta.env.BASE_URL}display`.replace(/\/+/g, '/').replace(':/', '://')
+const karaokeHref = `${import.meta.env.BASE_URL}karaoke`.replace(/\/+/g, '/').replace(':/', '://')
 
 function App() {
   const [fingerprintId, setFingerprintId] = useState(null)
@@ -193,9 +194,14 @@ function App() {
         </div>
       )}
       <header className="flex justify-between items-center px-4 py-3 gap-2 pt-[max(0.75rem,env(safe-area-inset-top,0px))]">
-        <a href={displayHref} title="Display mode" className="hidden sm:inline-flex p-2.5 -ml-1 rounded-lg text-muted-foreground/60 hover:text-muted-foreground hover:bg-accent/50 transition-colors touch-manipulation">
-          <Tv className="h-5 w-5" />
-        </a>
+        <div className="hidden sm:flex items-center -ml-1">
+          <a href={displayHref} title="Display mode" className="inline-flex p-2.5 rounded-lg text-muted-foreground/60 hover:text-muted-foreground hover:bg-accent/50 transition-colors touch-manipulation">
+            <Tv className="h-5 w-5" />
+          </a>
+          <a href={karaokeHref} title="Karaoke mode" className="inline-flex p-2.5 rounded-lg text-muted-foreground/60 hover:text-muted-foreground hover:bg-accent/50 transition-colors touch-manipulation">
+            <Mic className="h-5 w-5" />
+          </a>
+        </div>
         <ThemeToggle />
       </header>
       <main className="container max-w-2xl mx-auto px-4 pb-8 pb-[max(2rem,env(safe-area-inset-bottom))]">

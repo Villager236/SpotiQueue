@@ -11,6 +11,8 @@ const SENSITIVE_KEYS = new Set(['admin_password', 'admin_password_hash']);
 router.get('/public', (req, res) => {
   const queueUrl = getConfig('queue_url') || process.env.CLIENT_URL || '';
   res.json({
+    require_synced_lyrics: getConfig('require_synced_lyrics') === 'true',
+    lyric_sync_offset_ms: parseInt(getConfig('lyric_sync_offset_ms') || '-220', 10) || 0,
     prequeue_enabled: getConfig('prequeue_enabled') === 'true',
     search_ui_enabled: getConfig('search_ui_enabled') !== 'false',
     url_input_enabled: getConfig('url_input_enabled') !== 'false',
