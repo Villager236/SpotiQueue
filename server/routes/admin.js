@@ -412,6 +412,10 @@ router.get('/stats', (req, res) => {
 router.post('/reset-all-data', (req, res) => {
   try {
     const resetData = db.transaction(() => {
+      db.prepare('DELETE FROM pending_queue_locks').run();
+      db.prepare('DELETE FROM pending_queues').run();
+      db.prepare('DELETE FROM prequeue').run();
+      db.prepare('DELETE FROM votes').run();
       db.prepare('DELETE FROM queue_attempts').run();
       db.prepare('DELETE FROM fingerprints').run();
       db.prepare('DELETE FROM banned_tracks').run();
