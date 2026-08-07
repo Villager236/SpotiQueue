@@ -222,39 +222,83 @@ function parseSpotifyCollectionUrl(url) {
   return null;
 }
 
-/** All tracks in a playlist or album, following pagination. */
-async function getCollectionTracks(type, id, max = 500) {
+function normalizeTrack(entry) {
+  // Spotify has been renaming these: playlist entries have carried the track
+  // under `track` and, more recently, under `item`. Album track lists are flat.
+  const track = entry?.item || entry?.track || entry;
+  if (!track?.id) return null;
+  return {
+    id: track.id,
+    name: track.name,
+    artists: (track.artists || []).map(a => a.name).join(', '),
+    duration_ms: track.duration_ms
+  };
+}
+async function getAlbumTracks(id, max) {
   const token = await getAccessToken();
-  const endpoint = type === 'album'
-      ? `${SPOTIFY_API_BASE}/albums/${id}/tracks`
-      : `${SPOTIFY_API_BASE}/playlists/${id}/tracks`;
-
   const tracks = [];
-  let url = endpoint;
+  let url = `${SPOTIFY_API_BASE}/albums/${id}/tracks`;
   let params = { limit: 50 };
 
   while (url && tracks.length < max) {
-    const response = await axios.get(url, {
-      params,
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    for (const item of response.data.items || []) {
-      // Playlists wrap the track; album track lists do not
-      const track = type === 'album' ? item : item.track;
-      if (!track?.id) continue;
-      tracks.push({
-        id: track.id,
-        name: track.name,
-        artists: (track.artists || []).map(a => a.name).join(', '),
-        duration_ms: track.duration_ms
-      });
+    const response = await axios.get(url, { params, headers: { 'Authorization': `Bearer ${token}` } });
+    for (const entry of response.data.items || []) {
+      const track = normalizeTrack(entry);
+      if (track) tracks.push(track);
     }
-
     url = response.data.next;
     params = undefined; // `next` already carries the query string
   }
 
+  return tracks;
+}
+
+/**
+ * Playlist contents.
+ *
+ * Read from /playlists/{id} rather than /playlists/{id}/tracks: the dedicated
+ * tracks endpoint now answers 403 for ordinary apps, while the playlist object
+ * still carries the full first page. The paging object has also moved from
+ * `tracks` to `items`, so both shapes are accepted.
+ */
+async function getPlaylistTracks(id, max) {
+  const token = await getAccessToken();
+  const headers = { 'Authorization': `Bearer ${token}` };
+  const response = await axios.get(`${SPOTIFY_API_BASE}/playlists/${id}`, { headers });
+
+  const page = response.data?.items || response.data?.tracks;
+  const tracks = [];
+
+  for (const entry of page?.items || []) {
+    const track = normalizeTrack(entry);
+    if (track) tracks.push(track);
+  }
+
+  // Longer playlists page through an endpoint that may itself be forbidden;
+  // return what we have rather than failing the whole job.
+  let next = page?.next;
+  while (next && tracks.length < max) {
+    try {
+      const more = await axios.get(next, { headers });
+      for (const entry of more.data.items || []) {
+        const track = normalizeTrack(entry);
+        if (track) tracks.push(track);
+      }
+      next = more.data.next;
+    } catch (error) {
+      console.warn(`Could not page past ${tracks.length} playlist tracks: ${error.response?.status || error.message}`);
+      break;
+    }
+  }
+
+  return tracks;
+}
+
+/** All tracks in a playlist or album. */
+async function getCollectionTracks(type, id, max = 500) {
+  const tracks = type === 'album'
+      ? await getAlbumTracks(id, max)
+      : await getPlaylistTracks(id, max);
   return tracks.slice(0, max);
 }
 

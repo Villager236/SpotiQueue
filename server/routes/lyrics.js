@@ -115,9 +115,19 @@ router.post('/prewarm', requireAdminSession, async (req, res) => {
         // Spotify blocks third-party API access to its own editorial/algorithmic
         // playlists ("Today's Top Hits", "Discover Weekly", ...), which is by far
         // the most likely reason a paste fails here.
-        if (status === 403 || status === 404) {
+        if (status === 404) {
             return res.status(400).json({
-                error: 'Spotify would not return that one. Playlists made by Spotify itself (editorial or personalised, like Discover Weekly) cannot be read by apps — use one of your own playlists, or an album link.'
+                error: 'Spotify could not find that playlist or album. Check the link, and note that private playlists are only readable by the account the app is connected to.'
+            });
+        }
+        if (status === 403) {
+            return res.status(400).json({
+                error: 'Spotify refused access to that one. Playlists it generates itself (editorial or personalised, such as Discover Weekly) cannot be read by apps — try one of your own playlists, or an album link.'
+            });
+        }
+        if (status === 429) {
+            return res.status(429).json({
+                error: 'Spotify is rate-limiting this app. Wait for the limit to clear and try again.'
             });
         }
         res.status(500).json({ error: error.message || 'Failed to read that playlist.' });
