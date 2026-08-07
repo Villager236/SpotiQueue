@@ -63,6 +63,12 @@ setInterval(() => {
   });
 }, 1000);
 
+// Behind a reverse proxy or tunnel in production, so client IPs arrive in
+// X-Forwarded-For. Needed for per-IP rate limiting to see real clients.
+if (isProduction) {
+  app.set('trust proxy', 1);
+}
+
 // Middleware
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:3000',

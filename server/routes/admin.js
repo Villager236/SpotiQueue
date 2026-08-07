@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { getDb } = require('../db');
 const { getConfig } = require('../utils/config');
 const { requireAdminSession } = require('../middleware/adminSession');
@@ -22,7 +23,27 @@ function getCooldownFingerprintIds(fingerprint) {
   return [fingerprint.id];
 }
 
-router.post('/login', (req, res) => {
+/**
+ * Brute-force guard on the only password-protected surface in the app.
+ *
+ * Matters most when the admin panel is reachable from the internet so helpers
+ * can approve songs - without this, the password is guessable at full speed.
+ * Successful logins are not counted, so a legitimate helper who signs in
+ * repeatedly is never locked out.
+ */
+// Tuned for a live event: generous enough that a helper mistyping in the dark is
+// not locked out, tight enough that guessing at machine speed is hopeless.
+// Restarting the service clears it, since the counters are in memory.
+const loginLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 20,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many sign-in attempts. Wait a few minutes and try again.' }
+});
+
+router.post('/login', loginLimiter, (req, res) => {
   const { password, totp } = req.body || {};
   if (!verifyAdminPassword(password)) {
     return res.status(401).json({ error: 'Invalid password' });
