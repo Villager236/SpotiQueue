@@ -215,7 +215,16 @@ router.post('/decline/:prequeueId', requireAdminSession, async (req, res) => {
 router.get('/pending', requireAdminSession, (req, res) => {
   const db = getDb();
   try {
-    const pending = db.prepare("SELECT * FROM prequeue WHERE status = 'pending' ORDER BY created_at DESC").all();
+    // Include who submitted each one - a name makes a flood from a single guest
+    // obvious at a glance.
+    const pending = db.prepare(`
+      SELECT p.*,
+             COALESCE(f.username, f.github_username, f.google_username) AS requested_by
+      FROM prequeue p
+      LEFT JOIN fingerprints f ON f.id = p.fingerprint_id
+      WHERE p.status = 'pending'
+      ORDER BY p.created_at DESC
+    `).all();
     res.json({ pending });
   } catch (error) {
     console.error('Pending error:', error);

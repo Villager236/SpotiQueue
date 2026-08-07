@@ -2,7 +2,94 @@ import { useState, useEffect } from 'react'
 import axios from '@/lib/api'
 import { Card, CardContent } from './ui/card'
 import { Button } from './ui/button'
-import { Loader2, Check, X, Music, MicOff } from 'lucide-react'
+import { Loader2, Check, X, Music, MicOff, SkipForward, User } from 'lucide-react'
+
+/**
+ * Now playing plus a skip control.
+ *
+ * Lives on the moderation screen because that is where you are looking when
+ * something needs to come off the speakers. Spotify cannot remove a queued
+ * track, so skipping is the only way to cut one short.
+ */
+function NowPlayingControl() {
+  const [track, setTrack] = useState(null)
+  const [skipping, setSkipping] = useState(false)
+  const [error, setError] = useState('')
+
+  const fetchTrack = async () => {
+    try {
+      const res = await axios.get('/api/now-playing')
+      setTrack(res.data?.track || null)
+    } catch {
+      // Non-critical
+    }
+  }
+
+  useEffect(() => {
+    fetchTrack()
+    const interval = setInterval(fetchTrack, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const skip = async () => {
+    setSkipping(true)
+    setError('')
+    try {
+      await axios.post('/api/admin/playback/next')
+      // Spotify needs a moment before it reports the new track
+      setTimeout(fetchTrack, 700)
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to skip.')
+    } finally {
+      setSkipping(false)
+    }
+  }
+
+  return (
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center gap-3">
+            {track?.album_art ? (
+                <img src={track.album_art} alt={track.name} className="h-12 w-12 flex-shrink-0 rounded object-cover" />
+            ) : (
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded bg-muted">
+                  <Music className="h-5 w-5 text-muted-foreground" />
+                </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs uppercase tracking-widest text-muted-foreground">Now playing</p>
+              {track ? (
+                  <>
+                    <p className="truncate font-medium">{track.name}</p>
+                    <p className="truncate text-sm text-muted-foreground">
+                      {track.artists}
+                      {track.requested_by && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-primary">
+                      <User className="h-3 w-3" />{track.requested_by}
+                    </span>
+                      )}
+                    </p>
+                  </>
+              ) : (
+                  <p className="text-sm text-muted-foreground">Nothing playing</p>
+              )}
+            </div>
+            <Button
+                size="sm"
+                variant="destructive"
+                onClick={skip}
+                disabled={skipping || !track}
+                className="flex-shrink-0"
+                title="Skip the current track"
+            >
+              {skipping ? <Loader2 className="h-4 w-4 animate-spin" /> : <><SkipForward className="mr-1 h-4 w-4" /> Skip</>}
+            </Button>
+          </div>
+          {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+        </CardContent>
+      </Card>
+  )
+}
 
 function PrequeueManagement() {
   const [pending, setPending] = useState([])
@@ -62,6 +149,7 @@ function PrequeueManagement() {
 
   return (
     <div className="space-y-4">
+      <NowPlayingControl />
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Prequeue Requests</h2>
         {pending.length > 0 && (
@@ -96,7 +184,14 @@ function PrequeueManagement() {
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">{request.track_name}</p>
-                    <p className="text-sm text-muted-foreground truncate">{request.artist_name}</p>
+                    <p className="text-sm text-muted-foreground truncate">
+                      {request.artist_name}
+                      {request.requested_by && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-foreground/70">
+                          <User className="h-3 w-3" />{request.requested_by}
+                        </span>
+                      )}
+                    </p>
                     {request.has_lyrics === 0 && (
                         <p className="mt-1 inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
                           <MicOff className="h-3 w-3" /> No synced lyrics

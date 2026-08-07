@@ -2,6 +2,7 @@ const express = require('express');
 const { getNowPlaying, getQueue, getPlayerBackoffUntil, setPlayerBackoff } = require('../utils/spotify');
 const { getLyrics } = require('../utils/lyrics');
 const { getCachedLyrics, saveLyrics } = require('../utils/lyricsAvailability');
+const { getRequesterNames } = require('../utils/requesters');
 
 const router = express.Router();
 const lyricsFailureCache = new Map();
@@ -127,6 +128,8 @@ router.get('/', async (req, res) => {
       } else {
         ensureLyricsFetch(nowPlaying);
       }
+      // Who is up at the microphone
+      nowPlaying.requested_by = getRequesterNames([nowPlaying.id])[nowPlaying.id] || null;
     }
 
     // Deliberately not awaited, and on its own slow cadence - this used to run on

@@ -1,6 +1,6 @@
 import { useState, useRef, useLayoutEffect, useEffect } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Music, WifiOff, MicOff } from 'lucide-react'
+import { Music, WifiOff, MicOff, Mic } from 'lucide-react'
 import { useAuraColor } from '../hooks/useAuraColor'
 import { usePlayback, formatDuration } from '../hooks/usePlayback'
 
@@ -192,6 +192,15 @@ export default function Karaoke() {
                         <p className="truncate text-[clamp(0.6875rem,0.8vw,0.9375rem)] text-white/50" title={nowPlaying.artists}>
                             {nowPlaying.artists}
                         </p>
+                        {nowPlaying.requested_by && (
+                            <p
+                                className="mt-[0.6vh] truncate rounded-md bg-white/10 px-2 py-[0.4vh] text-center text-[clamp(0.75rem,1.1vw,1.25rem)] font-semibold"
+                                title={nowPlaying.requested_by}
+                            >
+                                <Mic className="mr-1 inline h-[1em] w-[1em] align-[-0.1em]" />
+                                {nowPlaying.requested_by}
+                            </p>
+                        )}
                         <div className="mt-[0.8vh] h-1 w-full overflow-hidden rounded-full bg-white/15">
                             <div
                                 className="h-full rounded-full"
@@ -229,7 +238,7 @@ export default function Karaoke() {
                                             {track.name}
                                         </p>
                                         <p className="truncate text-[clamp(0.5625rem,0.65vw,0.8125rem)] text-white/40" title={track.artists}>
-                                            {track.artists}
+                                            {track.requested_by || track.artists}
                                         </p>
                                     </div>
                                 </div>

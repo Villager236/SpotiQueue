@@ -6,6 +6,7 @@ const { searchTracks, getTrack, parseSpotifyUrl, addToQueue, getQueue } = requir
 const { getGuestAuthRequirements, sendAuthRequiredResponse } = require('../utils/guest-auth');
 const { getRemainingCooldown, hasExhaustedQuota, applyCooldownAfterSuccess, getCooldownSettings } = require('../utils/cooldown');
 const { checkAvailability, warmAvailability } = require('../utils/lyricsAvailability');
+const { getRequesterNames } = require('../utils/requesters');
 
 const router = express.Router();
 const db = getDb();
@@ -195,11 +196,24 @@ router.get('/current', async (req, res) => {
         db.prepare("SELECT DISTINCT track_id FROM queue_attempts WHERE status = 'success' AND track_id IS NOT NULL").all().map(r => r.track_id)
     );
 
+    const requesters = getRequesterNames([
+      ...(queue?.queue || []).map(t => t.id),
+      queue?.currently_playing?.id
+    ]);
+
     if (queue?.queue?.length > 0) {
-      queue.queue = queue.queue.map(t => ({ ...t, votable: guestQueuedIds.has(t.id) }));
+      queue.queue = queue.queue.map(t => ({
+        ...t,
+        votable: guestQueuedIds.has(t.id),
+        requested_by: requesters[t.id] || null
+      }));
     }
     if (queue?.currently_playing) {
-      queue.currently_playing = { ...queue.currently_playing, votable: guestQueuedIds.has(queue.currently_playing.id) };
+      queue.currently_playing = {
+        ...queue.currently_playing,
+        votable: guestQueuedIds.has(queue.currently_playing.id),
+        requested_by: requesters[queue.currently_playing.id] || null
+      };
     }
 
     queueCache = queue;
@@ -633,5 +647,12 @@ router.get('/votes', (req, res) => {
   }
 });
 
+/** Force the next /current call to re-read Spotify, e.g. right after a skip. */
+function invalidateQueueCache() {
+  queueCacheExpiry = 0;
+}
+
+
 module.exports = router;
 module.exports.processExpiredPendingQueues = processExpiredPendingQueues;
+module.exports.invalidateQueueCache = invalidateQueueCache;

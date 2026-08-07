@@ -379,6 +379,35 @@ async function addToQueue(trackUri) {
     throw new Error('Failed to add track to queue');
   }
 }
+/**
+ * Skip whatever is playing.
+ *
+ * The Web API cannot remove a track from the queue, so this is the only way to
+ * get rid of something already on the speakers.
+ */
+async function skipToNext() {
+  const token = await getAccessToken();
+
+  try {
+    await axios.post(`${SPOTIFY_API_BASE}/me/player/next`, null, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    return true;
+  } catch (error) {
+    console.error('Error skipping track:', error.response?.data || error.message);
+
+    if (error.response?.status === 404) {
+      throw new Error('No active Spotify device found. Start playing music on a device first.');
+    }
+    if (error.response?.status === 403) {
+      throw new Error('Spotify refused the skip. This requires a Premium account.');
+    }
+    if (error.response?.status === 429) {
+      throw new Error('Spotify is rate-limiting playback controls. Try again shortly.');
+    }
+    throw new Error('Failed to skip track');
+  }
+}
 
 // Get current queue
 async function getQueue() {
@@ -425,6 +454,7 @@ module.exports = {
   getCollectionTracks,
   getNowPlaying,
   addToQueue,
+  skipToNext,
   getQueue,
   getAccessToken,
   clearTokenCache,
