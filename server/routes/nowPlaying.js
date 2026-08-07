@@ -81,7 +81,9 @@ async function loadNowPlaying() {
     try {
       const track = await getNowPlaying();
       npCache = { track, at: Date.now() };
-      return track;
+      // Hand back a copy: callers decorate the result with lyrics and requester,
+      // and mutating the cached object would leak those into later responses.
+      return withCurrentProgress(track, npCache.at);
     } catch (error) {
       if (error.status === 429) {
         const askedMs = (error.retryAfter ? error.retryAfter + 1 : 10) * 1000;
@@ -154,11 +156,16 @@ function prefetchQueueLyrics() {
 router.get('/', async (req, res) => {
   try {
     const nowPlaying = await loadNowPlaying();
+    // Lyrics are ~90% of this payload and only the big screens render them. Every
+    // guest phone polls this endpoint every few seconds, so they are opt-in - it
+    // makes a large difference when the venue is on a phone's mobile data.
+    const wantLyrics = req.query.lyrics === '1' || req.query.lyrics === 'true';
 
     if (nowPlaying) {
       const cached = getCachedLyrics(nowPlaying.id);
       if (cached) {
-        nowPlaying.lyrics = cached;
+        // Still fetched and cached for everyone; simply not serialised unless asked
+        if (wantLyrics) nowPlaying.lyrics = cached;
       } else {
         ensureLyricsFetch(nowPlaying);
       }

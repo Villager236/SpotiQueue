@@ -89,7 +89,9 @@ export function usePlayback() {
         const fetchNowPlaying = async () => {
             if (cancelled) return
             try {
-                const res = await axios.get('/api/now-playing', { timeout: 5000 })
+                // The big screens are the only clients that render lyrics, so they ask
+                // for them explicitly; guest phones get a much smaller payload.
+                const res = await axios.get('/api/now-playing?lyrics=1', { timeout: 5000 })
                 if (cancelled) return
                 const track = res.data?.track ?? null
                 setRateLimited(!!res.data?.rate_limited)
