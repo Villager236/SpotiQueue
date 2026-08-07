@@ -7,7 +7,6 @@ import DeviceManagement from './components/DeviceManagement'
 import BannedTracks from './components/BannedTracks'
 import Configuration from './components/Configuration'
 import EnvVariables from './components/EnvVariables'
-import PrequeueManagement from './components/PrequeueManagement'
 import QrCode from './components/QrCode'
 import Stats from './components/Stats'
 import SpotifyConnect from './components/SpotifyConnect'
@@ -95,7 +94,6 @@ function App() {
     { id: 'spotify', label: 'Spotify' },
     { id: 'qr', label: 'QR Code' },
     { id: 'queue', label: 'Live Queue' },
-    { id: 'prequeue', label: 'Prequeue' },
     { id: 'devices', label: 'Devices' },
     { id: 'banned', label: 'Banned Tracks' },
     { id: 'config', label: 'Configuration' },
@@ -237,7 +235,6 @@ function App() {
                 {activeTab === 'spotify' && <SpotifyConnect />}
                 {activeTab === 'qr' && <QrCode />}
                 {activeTab === 'queue' && <LiveQueue />}
-                {activeTab === 'prequeue' && <PrequeueManagement />}
                 {activeTab === 'devices' && <DeviceManagement />}
                 {activeTab === 'banned' && <BannedTracks />}
                 {activeTab === 'config' && <Configuration />}
