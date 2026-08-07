@@ -37,12 +37,44 @@ let npCache = { track: null, at: 0 };
 let npInFlight = null;
 let lastQueuePrefetchAt = 0;
 
+/**
+ * Age-correct a cached response.
+ *
+ * progress_ms is only true for the instant it was fetched. Serving it verbatim
+ * from cache reports a position that is behind real playback, which drags the
+ * clients' playback clocks backwards until they snap forward - and a snap jumps
+ * the highlighted lyric line past whatever should have been sung in between.
+ * Returns a copy so the cached object is never mutated.
+ */
+function withCurrentProgress(track, fetchedAt) {
+  if (!track) return null;
+  if (!track.is_playing || !fetchedAt) return { ...track };
+
+  const elapsed = Date.now() - fetchedAt;
+  const advanced = (track.progress_ms ?? 0) + elapsed;
+  return {
+    ...track,
+    progress_ms: track.duration_ms ? Math.min(advanced, track.duration_ms) : advanced
+  };
+}
+
+/** True once a cached track would have run past its own end. */
+function cachedTrackHasFinished() {
+  const track = npCache.track;
+  if (!track?.is_playing || !track.duration_ms || !npCache.at) return false;
+  return (track.progress_ms ?? 0) + (Date.now() - npCache.at) >= track.duration_ms;
+}
+
 async function loadNowPlaying() {
   const now = Date.now();
 
-  if (npCache.at && now - npCache.at < NOW_PLAYING_TTL_MS) return npCache.track;
+  // Past the end of the cached track the clamped position would lag real
+  // playback, so go back to Spotify even if the cache is otherwise fresh.
+  if (npCache.at && now - npCache.at < NOW_PLAYING_TTL_MS && !cachedTrackHasFinished()) {
+    return withCurrentProgress(npCache.track, npCache.at);
+  }
   // Rate limited: keep showing the last known track rather than "nothing playing"
-  if (now < getPlayerBackoffUntil()) return npCache.track;
+  if (now < getPlayerBackoffUntil()) return withCurrentProgress(npCache.track, npCache.at);
   if (npInFlight) return npInFlight;
 
   npInFlight = (async () => {
@@ -64,7 +96,9 @@ async function loadNowPlaying() {
         console.error('Now playing error:', error.message);
       }
       // Serve the last known track while it is still recent enough to be true
-      if (npCache.at && Date.now() - npCache.at < STALE_SERVE_MS) return npCache.track;
+      if (npCache.at && Date.now() - npCache.at < STALE_SERVE_MS) {
+        return withCurrentProgress(npCache.track, npCache.at);
+      }
       return null;
     } finally {
       npInFlight = null;
