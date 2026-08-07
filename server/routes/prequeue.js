@@ -143,7 +143,7 @@ router.post('/submit', async (req, res) => {
 
     db.prepare(`
       INSERT INTO prequeue (id, fingerprint_id, track_id, track_name, artist_name, album_art, status, created_at, has_lyrics)
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
     `).run(
         prequeueId,
         fingerprintId,
